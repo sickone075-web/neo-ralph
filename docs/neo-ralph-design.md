@@ -738,7 +738,184 @@ AMP_CMD="amp"
 
 ---
 
-## 13. 总结
+## 13. 存档机制
+
+### 设计灵感
+
+借鉴 [snarktank/ralph](https://github.com/snarktank/ralph) 的分支切换存档策略，并在此基础上增强。
+
+### snarktank/ralph 的存档方式
+
+```bash
+# 存档触发条件：分支变更时
+if [ "$CURRENT_BRANCH" != "$LAST_BRANCH" ]; then
+    ARCHIVE_FOLDER="$ARCHIVE_DIR/$DATE-$FOLDER_NAME"
+    cp "$PRD_FILE" "$ARCHIVE_FOLDER/"       # 存档 prd.json
+    cp "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"  # 存档 progress.txt
+fi
+```
+
+**优点**：
+- ✅ 自动触发，无需手动操作
+- ✅ 按特征分组，清晰
+- ✅ 保留上下文（prd.json + progress.txt）
+
+**缺点**：
+- ❌ 只在分支切换时存档
+- ❌ 同一分支内多次运行不存档
+- ❌ 无法回滚到某次迭代
+
+---
+
+### Neo-Ralph 存档策略
+
+**三层存档机制**：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  Neo-Ralph 存档体系                      │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  1. Git 自动提交（每次迭代）                            │
+│     └─ prd.json 每次更新都 commit                        │
+│                                                         │
+│  2. 分支切换存档（自动）                                │
+│     └─ 检测到分支变化时，备份到 archive/by-branch/      │
+│                                                         │
+│  3. 里程碑存档（关键节点）                              │
+│     ├─ PRD 生成完成 → archive/prd-initial.json         │
+│     ├─ 所有任务完成 → archive/prd-complete.json        │
+│     └─ 手动触发 → archive/prd-manual-YYYYMMDD.json     │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 存档目录结构
+
+```
+.ralph/
+├── prd.json                    # 当前任务列表
+├── progress.txt                # 当前进度日志
+├── .last-run-id                # 上次运行 ID
+├── .last-branch                # 上次分支名称
+└── archive/
+    ├── by-branch/              # 按分支存档
+    │   ├── 2026-03-05-login-feature/
+    │   │   ├── prd.json
+    │   │   └── progress.txt
+    │   └── 2026-03-04-dashboard/
+    │       └── ...
+    ├── by-milestone/           # 按里程碑存档
+    │   ├── prd-initial.json    # 初始版本
+    │   ├── prd-complete.json   # 完成版本
+    │   └── prd-manual-20260305.json  # 手动存档
+    └── by-iteration/           # 按迭代存档（可选）
+        ├── iteration-001.json
+        ├── iteration-002.json
+        └── ...
+```
+
+---
+
+### 存档触发逻辑
+
+```bash
+# 1. 分支切换检测（启动时）
+check_branch_change() {
+    local current_branch=$(jq -r '.branchName // empty' .ralph/prd.json)
+    local last_branch=$(cat .ralph/.last-branch 2>/dev/null || echo "")
+    
+    if [ -n "$current_branch" ] && [ -n "$last_branch" ] && [ "$current_branch" != "$last_branch" ]; then
+        archive_previous_run "$last_branch"
+    fi
+    
+    echo "$current_branch" > .ralph/.last-branch
+}
+
+# 2. 里程碑存档（关键节点）
+archive_milestone() {
+    local milestone=$1  # initial|complete|manual
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    
+    if [ "$milestone" = "initial" ]; then
+        cp .ralph/prd.json .ralph/archive/by-milestone/prd-initial.json
+    elif [ "$milestone" = "complete" ]; then
+        cp .ralph/prd.json .ralph/archive/by-milestone/prd-complete.json
+    elif [ "$milestone" = "manual" ]; then
+        cp .ralph/prd.json .ralph/archive/by-milestone/prd-manual-$timestamp.json
+    fi
+}
+
+# 3. Git 自动提交（每次迭代后）
+git_auto_commit_prd() {
+    if [ "$GIT_AUTO_COMMIT_PRD" = "true" ]; then
+        git add .ralph/prd.json
+        git commit -m "更新任务状态：$task_id"
+    fi
+}
+```
+
+---
+
+### 配置项 (.ralphrc)
+
+```bash
+# 存档配置
+ARCHIVE_ENABLED=true
+ARCHIVE_ON_BRANCH_CHANGE=true      # 分支切换时存档（默认开启）
+ARCHIVE_ON_MILESTONE=true          # 里程碑时存档（默认开启）
+ARCHIVE_ON_ITERATION=false         # 每次迭代都存档（默认关闭，太占空间）
+ARCHIVE_RETENTION_DAYS=90          # 备份保留天数（默认 90 天）
+GIT_AUTO_COMMIT_PRD=true           # Git 自动提交 prd.json（默认开启）
+```
+
+---
+
+### 存档文件清单
+
+| 文件 | Git 提交 | 分支存档 | 里程碑存档 | 迭代存档 |
+|------|----------|----------|------------|----------|
+| `prd.json` | ✅ | ✅ | ✅ | 可选 |
+| `progress.txt` | ✅ | ✅ | ❌ | ❌ |
+| `AGENTS.md` | ✅ | ✅ | ❌ | ❌ |
+| `status.json` | ❌ | ❌ | ❌ | ❌ |
+| `logs/*` | 可选 | ❌ | ❌ | ❌ |
+
+---
+
+### 回滚操作
+
+```bash
+# 查看存档历史
+ls -la .ralph/archive/by-branch/
+ls -la .ralph/archive/by-milestone/
+
+# 回滚到某个版本
+cp .ralph/archive/by-branch/2026-03-05-login-feature/prd.json .ralph/prd.json
+
+# Git 回滚（如果启用了 Git 自动提交）
+git log --oneline .ralph/prd.json
+git checkout <commit-hash> -- .ralph/prd.json
+```
+
+---
+
+### 清理策略
+
+```bash
+# 定期清理过期存档（心跳任务）
+cleanup_old_archives() {
+    local retention_days=${ARCHIVE_RETENTION_DAYS:-90}
+    find .ralph/archive/by-branch/ -type d -mtime +$retention_days -exec rm -rf {} \;
+    find .ralph/archive/by-milestone/ -type f -mtime +$retention_days -exec rm -f {} \;
+}
+```
+
+---
+
+## 14. 总结
 
 Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 
@@ -748,5 +925,6 @@ Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 4. **Git 记忆** - 完整可追溯
 5. **系统保护** - 速率限制 + 断路器
 6. **统一任务源** - 只用 prd.json（结构化）
+7. **三层存档** - Git + 分支 + 里程碑
 
 下一步：编写 `modification-plan.md` 详细修改清单。
