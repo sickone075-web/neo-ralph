@@ -915,7 +915,210 @@ cleanup_old_archives() {
 
 ---
 
-## 14. 总结
+## 14. 权限机制
+
+### 设计哲学
+
+Neo-Ralph 支持**可切换的权限模式**，结合 snarktank/ralph 的全权限模式和 frankbria 的白名单模式。
+
+### snarktank/ralph 的权限方式
+
+```bash
+# ralph.sh 核心代码
+if [[ "$TOOL" == "amp" ]]; then
+    OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1)
+else
+    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md")
+fi
+```
+
+**特点**：
+- ✅ 使用 `--dangerously-allow-all` (Amp) 或 `--dangerously-skip-permissions` (Claude Code)
+- ✅ 完全信任 AI，无权限限制
+- ✅ 依赖 Git 分支隔离 + 质量检查控制风险
+- ❌ 可执行任何命令（包括危险操作）
+
+**适用场景**：个人项目、可信环境
+
+---
+
+### frankbria/ralph-claude-code 的权限方式
+
+```bash
+# .ralphrc 配置
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
+
+# ralph_loop.sh 调用
+claude --allowed-tools "$ALLOWED_TOOLS" --prompt "..."
+```
+
+**特点**：
+- ✅ 白名单机制，默认拒绝
+- ✅ 可阻止危险操作
+- ❌ 配置复杂，权限不足需手动调整
+- ❌ 可能限制 AI 发挥
+
+**适用场景**：生产环境、团队协作
+
+---
+
+### Neo-Ralph 权限模式
+
+**三种可选模式**：
+
+```bash
+# .ralphrc 配置
+PERMISSION_MODE="hybrid"  # full | restricted | hybrid
+```
+
+#### 模式 1: Full（全权限，snarktank 风格）
+
+```bash
+PERMISSION_MODE="full"
+
+# CLI 参数
+CLAUDE_FLAGS="--dangerously-skip-permissions"
+```
+
+**特点**：
+- 完全信任 AI
+- 无权限检查开销
+- 依赖事后机制（Git、质检）控制风险
+
+**适用场景**：个人项目、完全信任的代码库
+
+---
+
+#### 模式 2: Restricted（限制模式，frankbria 风格）
+
+```bash
+PERMISSION_MODE="restricted"
+
+# .ralphrc 配置
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm run test),Bash(npm run build)"
+
+# CLI 参数
+CLAUDE_FLAGS="--allowed-tools $ALLOWED_TOOLS"
+```
+
+**特点**：
+- 白名单机制
+- 阻止未授权操作
+- 权限不足时需手动扩展
+
+**适用场景**：生产环境、核心项目
+
+---
+
+#### 模式 3: Hybrid（混合模式，推荐）
+
+```bash
+PERMISSION_MODE="hybrid"
+
+# .ralphrc 配置
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
+DANGEROUS_COMMANDS="rm -rf,dd,sudo,chmod,curl|wget"  # 敏感命令列表
+
+# CLI 参数
+CLAUDE_FLAGS="--allowed-tools $ALLOWED_TOOLS"
+
+# 特殊处理：AI 可请求临时权限扩展
+# （记录到日志，用户事后审查）
+```
+
+**特点**：
+- 默认白名单
+- 允许 AI 请求扩展（需记录）
+- 平衡灵活性与安全性
+
+**适用场景**：大多数团队项目
+
+---
+
+### 权限模式对比
+
+| 模式 | CLI 参数 | 安全性 | 灵活性 | 推荐场景 |
+|------|----------|--------|--------|----------|
+| **Full** | `--dangerously-skip-permissions` | ⭐⭐ | ⭐⭐⭐⭐⭐ | 个人项目 |
+| **Restricted** | `--allowed-tools "..."` | ⭐⭐⭐⭐⭐ | ⭐⭐ | 生产环境 |
+| **Hybrid** | `--allowed-tools "..."` + 扩展机制 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 团队项目 |
+
+---
+
+### 安全机制（所有模式通用）
+
+无论哪种权限模式，以下安全机制始终生效：
+
+| 机制 | 说明 |
+|------|------|
+| **Git 分支隔离** | 每个 PRD 在独立分支，不直接污染 main |
+| **质量检查门禁** | typecheck/test 必须通过才提交 |
+| **进度追踪** | progress.txt 记录每次迭代，可追溯 |
+| **存档机制** | 关键节点自动存档，可回滚 |
+| **人类最终审查** | PR/MR 需要人工 merge |
+
+---
+
+### 配置示例
+
+```bash
+# .ralphrc 完整配置
+
+# 权限模式
+PERMISSION_MODE="hybrid"
+
+# Full 模式（无需额外配置）
+# PERMISSION_MODE="full"
+
+# Restricted 模式
+# PERMISSION_MODE="restricted"
+# ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm run test)"
+
+# Hybrid 模式
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
+DANGEROUS_COMMANDS="rm -rf,dd,sudo,chmod"
+
+# 其他安全配置
+GIT_BRANCH_ISOLATION=true      # Git 分支隔离
+ENFORCE_QUALITY_CHECKS=true    # 强制质量检查
+PROGRESS_TRACKING=true         # 进度追踪
+ARCHIVE_ON_MILESTONE=true      # 里程碑存档
+```
+
+---
+
+### 权限拒绝处理
+
+```bash
+# 当 AI 尝试执行未授权命令时
+
+if command_denied; then
+    echo "❌ 权限拒绝：$command"
+    echo "允许的工具：$ALLOWED_TOOLS"
+    
+    # 记录到日志
+    log_permission_denied "$command"
+    
+    # 继续下一次迭代（不中断）
+    continue
+fi
+```
+
+---
+
+### 推荐配置
+
+| 项目类型 | 推荐模式 | 配置示例 |
+|----------|----------|----------|
+| **个人项目** | Full | `PERMISSION_MODE="full"` |
+| **团队项目** | Hybrid | `PERMISSION_MODE="hybrid"` |
+| **核心项目** | Restricted | `PERMISSION_MODE="restricted"` |
+| **实验性质** | Full | `PERMISSION_MODE="full"` |
+| **生产环境** | Restricted | `PERMISSION_MODE="restricted"` |
+
+---
+
+## 15. 总结
 
 Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 
@@ -926,5 +1129,6 @@ Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 5. **系统保护** - 速率限制 + 断路器
 6. **统一任务源** - 只用 prd.json（结构化）
 7. **三层存档** - Git + 分支 + 里程碑
+8. **灵活权限** - Full/Restricted/Hybrid 三模式可选
 
 下一步：编写 `modification-plan.md` 详细修改清单。
