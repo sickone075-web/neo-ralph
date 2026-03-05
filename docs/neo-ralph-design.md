@@ -1,31 +1,29 @@
 # Neo-Ralph 架构设计文档
 
-> **Neo-Ralph = frankbria/ralph-claude-code 的躯干 + snarktank/ralph 的灵魂**
+> **Neo-Ralph = snarktank/ralph 的简洁 + frankbria 的保护机制**
 
 本文档描述 Neo-Ralph 的架构设计、核心模块和数据流。
+
+**版本**: v1.0.0  
+**最后更新**: 2026-03-05
 
 ---
 
 ## 1. 设计目标
 
-### 1.1 核心问题
+### 1.1 核心理念
 
-现有两个 Ralph 实现各有优劣：
+**采用 snarktank/ralph 的 Git 分支管理逻辑，保持简洁，只增加必要的保护机制。**
 
-| 项目 | 优势 | 劣势 |
-|------|------|------|
-| **snarktank/ralph** | 任务约束严格、Git 记忆清晰、PRD 生成友好 | 无系统保护、无速率限制、无会话管理 |
-| **frankbria/ralph-claude-code** | 系统保护完善、速率限制、断路器、会话管理 | 任务约束弱、PRD 需手动编写、Git 记忆不强制 |
+### 1.2 设计原则
 
-### 1.2 Neo-Ralph 目标
-
-**融合两者优点，打造一个既安全又高效的自主 AI 开发循环工具：**
-
-- ✅ 保留 frankbria 的系统保护（速率限制、断路器、会话管理）
-- ✅ 引入 snarktank 的任务约束（单任务/迭代、强制质量检查）
-- ✅ 新增交互式 PRD 生成能力
-- ✅ 增强 Git 记忆机制
-- ✅ 支持短任务/长任务双模式
+| 原则 | 说明 |
+|------|------|
+| **一个需求 = 一个分支** | Git 分支天然隔离，简单有效 |
+| **最少文件** | 只有 prd.json + progress.txt 两个核心文件 |
+| **自动存档** | 分支切换时自动备份，防止数据丢失 |
+| **人类审查** | PR/MR 需要人工 merge，最终控制 |
+| **可选保护** | 速率限制、断路器可选择性启用 |
 
 ---
 
@@ -34,603 +32,115 @@
 ### 2.1 整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户接口层                                │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │ ralph       │  │ ralph-prd   │  │ ralph-monitor│             │
-│  │ (主循环)    │  │ (PRD 生成)  │  │ (监控仪表盘) │              │
-│  └─────────────┘  └─────────────┘  └─────────────┘              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        核心引擎层                                │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    ralph_loop.sh                         │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │    │
-│  │  │ 模式选择器    │  │ 任务调度器    │  │ 退出检测器    │   │    │
-│  │  │ Mode Selector│  │ Task Scheduler│  │ Exit Detector │   │    │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘   │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │    │
-│  │  │ 速率限制器    │  │ 断路器       │  │ 会话管理器    │   │    │
-│  │  │ Rate Limiter │  │ Circuit      │  │ Session      │   │    │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        功能模块层                                │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐   │
-│  │ Git Memory │ │Quality     │ │ PRD        │ │ Response   │   │
-│  │ (Git 记忆)  │ │Check(质检) │ │Generator   │ │ Analyzer   │   │
-│  │            │ │            │ │(PRD 生成)  │ │(响应分析)  │   │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        基础设施层                                │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐   │
-│  │ Claude     │ │ Git        │ │ File       │ │ Logging    │   │
-│  │ Code CLI   │ │ Repository │ │ System     │ │ System     │   │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    用户接口层                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │ ralph prd   │  │ ralph       │  │ ralph       │      │
+│  │ (需求管理)  │  │ (执行循环)  │  │ prd --list  │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                    核心引擎层                            │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │              ralph_loop.sh                       │    │
+│  │  ┌──────────────┐  ┌──────────────┐            │    │
+│  │  │ 分支管理器    │  │ 任务调度器    │            │    │
+│  │  │ Branch Mgr  │  │ Task Scheduler│            │    │
+│  │  └──────────────┘  └──────────────┘            │    │
+│  │  ┌──────────────┐  ┌──────────────┐            │    │
+│  │  │ 退出检测器    │  │ 存档管理器    │            │    │
+│  │  │ Exit Detector│  │ Archive Mgr  │            │    │
+│  │  └──────────────┘  └──────────────┘            │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                    基础设施层                            │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐          │
+│  │ Git        │ │ Claude     │ │ File       │          │
+│  │ Repository │ │ Code CLI   │ │ System     │          │
+│  └────────────┘ └────────────┘ └────────────┘          │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. 核心模块设计
+## 3. 需求管理（Git 分支模式）
 
-### 3.1 模式选择器 (Mode Selector)
+### 3.1 核心设计
 
-**职责**: 根据任务复杂度自动选择运行模式
-
-```
-┌─────────────────────────────────────────────┐
-│            模式选择逻辑                      │
-├─────────────────────────────────────────────┤
-│  输入：PRD 文件 / 任务列表                   │
-│  处理：估算任务复杂度                        │
-│  输出：short | long | auto                   │
-└─────────────────────────────────────────────┘
-
-复杂度估算因子:
-- 任务数量
-- 每个任务的字数
-- 是否涉及多模块集成
-- 是否有前端 UI 变更
-- 是否有数据库变更
-
-决策树:
-IF 任务数 <= 3 AND 总字数 < 1000
-  → SHORT_MODE (无状态，每次 fresh context)
-ELSE IF 任务数 > 10 OR 有复杂集成
-  → LONG_MODE (有状态，保持会话连续性)
-ELSE
-  → AUTO_MODE (根据运行时动态判断)
-```
-
-### 3.2 任务调度器 (Task Scheduler)
-
-**职责**: 强制单任务/迭代约束
+**一个需求 = 一个 Git 分支 + 一套 prd.json**
 
 ```
-┌─────────────────────────────────────────────┐
-│           任务调度流程                       │
-├─────────────────────────────────────────────┤
-│  1. 读取 .ralph/prd.json                    │
-│  2. 筛选 passes=false 的任务                 │
-│  3. 按 priority 升序排序                     │
-│  4. 返回 TOP 1 任务（强制单任务）             │
-│  5. 锁定任务（防止并发）                     │
-└─────────────────────────────────────────────┘
-
-关键约束:
-- 每次迭代只处理 1 个任务
-- 任务完成后才能选择下一个
-- 支持任务依赖检查
-- 唯一任务源：prd.json（结构化）
-```
-
-### 3.3 质量检查器 (Quality Checker)
-
-**职责**: 强制质量检查，防止烂代码提交
-
-```
-┌─────────────────────────────────────────────┐
-│           质量检查流程                       │
-├─────────────────────────────────────────────┤
-│  1. 任务执行完成                            │
-│  2. 运行 .ralphrc 中定义的检查命令           │
-│     - typecheck                             │
-│     - lint                                  │
-│     - test                                  │
-│     - browser check (可选)                  │
-│  3. 全部通过 → 允许提交                      │
-│  4. 任一失败 → 记录失败，下次重试            │
-└─────────────────────────────────────────────┘
-
-配置示例 (.ralphrc):
-QUALITY_CHECKS="npm run typecheck && npm run lint && npm run test"
-ENFORCE_QUALITY_CHECKS=true
-ENABLE_BROWSER_CHECK=false
-```
-
-### 3.4 Git 记忆模块 (Git Memory)
-
-**职责**: 记录每次迭代的 git 状态，增强可追溯性
-
-```
-┌─────────────────────────────────────────────┐
-│           Git 记忆记录流程                    │
-├─────────────────────────────────────────────┤
-│  1. 任务完成且质检通过                       │
-│  2. 执行 git commit                         │
-│  3. 记录到 .ralph/logs/git_history.log      │
-│     格式：timestamp | task_id | commit_hash │
-│  4. 追加到 progress.txt                     │
-│  5. 更新 AGENTS.md (项目约定)               │
-└─────────────────────────────────────────────┘
-
-文件结构:
-.ralph/
-├── logs/
-│   └── git_history.log    # Git 提交历史
-├── progress.txt           # 迭代学习日志
-└── AGENTS.md              # 项目约定和坑点
-```
-
-### 3.5 PRD 生成器 (PRD Generator)
-
-**职责**: 交互式生成结构化 PRD 文档
-
-```
-┌─────────────────────────────────────────────┐
-│           PRD 生成流程                       │
-├─────────────────────────────────────────────┤
-│  1. 用户输入功能描述                        │
-│  2. Claude 询问澄清问题                     │
-│     - 核心用户价值                          │
-│     - 具体场景                              │
-│     - 技术约束                              │
-│     - 验收标准                              │
-│  3. 生成结构化 PRD 文档                      │
-│  4. 转换为 prd.json / fix_plan.md           │
-└─────────────────────────────────────────────┘
-
-输出文件:
-.ralph/specs/prd-[feature].md  # 原始 PRD 文档（人类可读，仅供参考）
-.ralph/prd.json                # 结构化任务列表（唯一任务源）
-```
-
-### 3.6 退出检测器 (Exit Detector)
-
-**职责**: 智能判断何时停止循环
-
-```
-┌─────────────────────────────────────────────┐
-│           双条件退出检测                     │
-├─────────────────────────────────────────────┤
-│  条件 1: completion_indicators >= 2         │
-│    (从自然语言模式检测完成信号)              │
-│                                             │
-│  条件 2: EXIT_SIGNAL = true                 │
-│    (Claude 明确输出退出信号)                 │
-│                                             │
-│  退出 = 条件 1 AND 条件 2                    │
-└─────────────────────────────────────────────┘
-
-其他退出条件:
-- 所有任务标记完成
-- 断路器打开超过阈值
-- 达到最大迭代次数
-- API 5 小时限制到达
+需求创建
+    │
+    ▼
+创建 Git 分支 (feature/login-20260305)
+    │
+    ▼
+生成 .ralph/prd.json
+    │
+    ▼
+循环执行任务
+    │
+    ▼
+需求完成 → Merge 到 main
+    │
+    ▼
+自动存档到 .ralph/archive/
 ```
 
 ---
 
-## 4. 数据流
-
-### 4.1 完整执行流程
+### 3.2 目录结构
 
 ```
-用户启动
-    │
-    ▼
-┌─────────────────┐
-│ 读取 .ralphrc   │
-│ 加载配置        │
-└─────────────────┘
-    │
-    ▼
-┌─────────────────┐
-│ 速率限制检查    │
-│ (是否超限？)    │
-└─────────────────┘
-    │
-    ├─────── 是 ───────► 等待重置 / 退出
-    │
-    否
-    │
-    ▼
-┌─────────────────┐
-│ 断路器状态检查  │
-│ (是否打开？)    │
-└─────────────────┘
-    │
-    ├─────── 是 ───────► 等待冷却 / 手动干预
-    │
-    否
-    │
-    ▼
-┌─────────────────┐
-│ 模式选择        │
-│ (short/long)    │
-└─────────────────┘
-    │
-    ▼
-┌─────────────────┐
-│ 获取下一个任务  │
-│ (单任务约束)    │
-└─────────────────┘
-    │
-    ├─────── 无任务 ─────► 退出 (项目完成)
-    │
-    有任务
-    │
-    ▼
-┌─────────────────┐
-│ 执行 Claude Code│
-│ (带上下文)      │
-└─────────────────┘
-    │
-    ▼
-┌─────────────────┐
-│ 质量检查        │
-│ (tests/lint)    │
-└─────────────────┘
-    │
-    ├─────── 失败 ─────► 记录失败，下次重试
-    │
-    通过
-    │
-    ▼
-┌─────────────────┐
-│ Git 提交         │
-│ 更新状态        │
-└─────────────────┘
-    │
-    ▼
-┌─────────────────┐
-│ 退出检测        │
-│ (是否完成？)    │
-└─────────────────┘
-    │
-    ├─────── 是 ───────► 退出
-    │
-    否
-    │
-    ▼
-(循环回速率限制检查)
-```
-
-### 4.2 状态文件
-
-| 文件 | 用途 | 更新频率 |
-|------|------|----------|
-| `.ralphrc` | 项目配置 | 初始化时 |
-| `.ralph/prd.json` | **唯一任务源**（结构化） | 每次任务完成 |
-| `.ralph/specs/prd-*.md` | 原始 PRD 文档（人类可读） | PRD 生成时 |
-| `.ralph/progress.txt` | 学习日志 | 每次迭代 |
-| `.ralph/logs/git_history.log` | Git 历史 | 每次提交 |
-| `.ralph/logs/ralph.log` | 执行日志 | 实时 |
-| `.ralph/status.json` | 当前状态 | 每次循环 |
-
-**注意**: `fix_plan.md` 已废弃，不再使用。所有任务统一存储为 `prd.json`。
-| `.ralph/.ralph_session` | 会话 ID | 会话变化时 |
-| `.ralph/AGENTS.md` | 项目约定 | 每次迭代 |
-
----
-
-## 5. 关键算法
-
-### 5.1 任务复杂度估算
-
-```bash
-estimate_complexity() {
-    local prd_file=$1
-    
-    # 基础分数：任务数量
-    local task_count=$(jq '.userStories | length' "$prd_file")
-    local score=$task_count
-    
-    # 字数因子
-    local word_count=$(wc -w < "$prd_file")
-    score=$((score + word_count / 200))
-    
-    # 复杂度关键词
-    local has_integration=$(grep -ci "集成\|对接\|API\|microservice" "$prd_file")
-    local has_ui=$(grep -ci "界面\|UI\|前端\|component" "$prd_file")
-    local has_db=$(grep -ci "数据库\|migration\|schema" "$prd_file")
-    
-    score=$((score + has_integration * 3 + has_ui * 2 + has_db * 2))
-    
-    echo $score
-}
-
-# 阈值判断
-if [ $score -lt 5 ]; then
-    MODE="short"
-elif [ $score -gt 15 ]; then
-    MODE="long"
-else
-    MODE="auto"
-fi
-```
-
-### 5.2 速率限制算法
-
-```bash
-check_rate_limit() {
-    local current_hour=$(date +%Y%m%d%H)
-    local last_hour=$(cat .ralph/.last_hour 2>/dev/null || echo "0")
-    local call_count=$(cat .ralph/.call_count 2>/dev/null || echo "0")
-    
-    # 小时重置
-    if [ "$current_hour" != "$last_hour" ]; then
-        call_count=0
-        echo "$current_hour" > .ralph/.last_hour
-    fi
-    
-    # 检查是否超限
-    if [ "$call_count" -ge "$MAX_CALLS_PER_HOUR" ]; then
-        echo "速率限制已到达 ($call_count/$MAX_CALLS_PER_HOUR)"
-        return 1
-    fi
-    
-    # 增加计数
-    call_count=$((call_count + 1))
-    echo "$call_count" > .ralph/.call_count
-    
-    return 0
-}
-```
-
-### 5.3 断路器状态机
-
-```
-状态转换:
-
-CLOSED (正常) 
-    │
-    ├─ 3 次无进度 ────────┐
-    ├─ 5 次同错 ──────────┼──► OPEN (打开)
-    │                    │
-    │                    │ 等待 CB_COOLDOWN_MINUTES
-    │                    │
-    │                    ▼
-    │              HALF_OPEN (半开)
-    │                    │
-    │                    ├─ 成功 ──► CLOSED
-    │                    │
-    │                    └─ 失败 ──► OPEN
-    │
-    └─ 手动重置 ────────────────► CLOSED
-```
-
----
-
-## 6. 配置设计
-
-### 6.1 .ralphrc 配置项
-
-```bash
-# 项目基础配置
-PROJECT_NAME="my-project"
-PROJECT_TYPE="typescript"
-
-# 模式配置
-DEFAULT_MODE="auto"  # short | long | auto
-
-# 速率限制
-MAX_CALLS_PER_HOUR=100
-
-# 断路器
-CB_NO_PROGRESS_THRESHOLD=3
-CB_SAME_ERROR_THRESHOLD=5
-CB_COOLDOWN_MINUTES=30
-CB_AUTO_RESET=false
-
-# 质量检查（新增）
-QUALITY_CHECKS="npm run typecheck && npm run test"
-ENFORCE_QUALITY_CHECKS=true
-ENABLE_BROWSER_CHECK=false
-BROWSER_CHECK_COMMAND="npx playwright test"
-
-# Git 配置（新增）
-GIT_COMMIT_ON_SUCCESS=true
-GIT_COMMIT_MESSAGE_PREFIX="完成："
-
-# 会话管理
-SESSION_CONTINUITY=true
-SESSION_EXPIRY_HOURS=24
-
-# Claude Code 配置
-CLAUDE_CODE_CMD="claude"
-CLAUDE_TIMEOUT_MINUTES=15
-CLAUDE_OUTPUT_FORMAT="json"
-
-# 工具权限
-ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)"
-```
-
----
-
-## 7. CLI 设计
-
-### 7.1 主命令
-
-```bash
-# 启动 Ralph（默认 auto 模式）
-ralph
-
-# 指定模式
-ralph --mode short    # 短任务模式
-ralph --mode long     # 长任务模式
-ralph --mode auto     # 自动模式
-
-# 严格模式（强制质量检查）
-ralph --strict
-
-# 带监控
-ralph --monitor
-
-# 实时流输出
-ralph --live
-
-# 自定义超时
-ralph --timeout 30
-
-# 查看状态
-ralph --status
-```
-
-### 7.2 新增命令
-
-```bash
-# 生成交互式 PRD
-ralph-prd
-
-# 导入 PRD 文档
-ralph-import requirements.md my-project
-
-# 启用项目（交互式向导）
-ralph-enable
-
-# Git 记忆查看
-ralph-git-history
-
-# 电路 breaker 状态
-ralph --circuit-status
-```
-
----
-
-## 8. 文件结构
-
-```
-neo-ralph/
-├── src/
-│   ├── ralph_loop.sh          # 核心循环（改造重点）
-│   ├── ralph_cli.sh           # CLI 参数解析
-│   ├── ralph_monitor.sh       # 监控仪表盘
-│   ├── ralph_prd.sh           # 【新增】PRD 生成器
-│   ├── git_memory.sh          # 【新增】Git 记忆模块
-│   ├── quality_checker.sh     # 【新增】质量检查器
-│   ├── mode_selector.sh       # 【新增】模式选择器
-│   ├── circuit_breaker.sh     # 断路器模块
-│   └── session_manager.sh     # 会话管理模块
+my-project/
+├── .ralph/
+│   ├── prd.json              # 当前需求任务列表
+│   ├── progress.txt          # 当前需求进度日志
+│   ├── .last-branch          # 上次分支记录（用于存档）
+│   │
+│   └── archive/              # 自动存档
+│       ├── 2026-03-05-login/
+│       │   ├── prd.json
+│       │   └── progress.txt
+│       └── ...
 │
-├── config/
-│   └── .ralphrc.template      # 配置模板（增强版）
-│
-├── docs/
-│   ├── neo-ralph-design.md    # 本文档
-│   ├── modification-plan.md   # 修改计划
-│   └── user-guide.md          # 用户指南
-│
-├── tests/
-│   ├── unit/
-│   │   ├── test_mode_selector.bats
-│   │   ├── test_quality_checker.bats
-│   │   └── test_git_memory.bats
-│   └── integration/
-│       └── test_full_loop.bats
-│
-└── ... (其他上游文件)
+├── .ralphrc                  # 项目配置（可选）
+└── src/                      # 源代码
 ```
 
 ---
 
-## 9. 安全与边界
-
-### 9.1 安全保护
-
-| 保护机制 | 描述 |
-|----------|------|
-| 速率限制 | 防止 API 费用失控 |
-| 断路器 | 防止无限错误循环 |
-| 工具白名单 | 防止危险命令执行 |
-| 会话过期 | 防止长期上下文污染 |
-| 质量检查 | 防止烂代码累积 |
-
-### 9.2 边界约束
-
-| 约束 | 实现方式 |
-|------|----------|
-| 单任务/迭代 | 任务调度器强制返回 1 个任务 |
-| 强制质检 | 质检失败则跳过提交 |
-| PRD 格式 | 严格 prd.json schema |
-| 前端验证 | 可选 browser check |
-
----
-
-## 10. 性能考虑
-
-### 10.1 Token 优化
-
-- **SHORT_MODE**: 每次 fresh context，Token 消耗低
-- **LONG_MODE**: 保持会话，但限制上下文长度
-
-### 10.2 执行优化
-
-- 并行质量检查（typecheck + lint + test）
-- 增量 Git 提交（只提交变更文件）
-- 日志轮转（防止日志文件过大）
-
----
-
-## 11. 扩展性
-
-### 11.1 插件系统（未来）
-
-```bash
-# 预留插件接口
-plugins/
-├── prd-generator/     # PRD 生成插件
-├── quality-checks/    # 质量检查插件
-└── notifications/     # 通知插件
-```
-
-### 11.2 多 AI 工具支持（未来）
-
-```bash
-# 支持切换 AI 工具
-CLAUDE_CODE_CMD="claude"  # 或
-AMP_CMD="amp"
-```
-
----
-
-## 12. 附录：prd.json Schema
-
-### 完整 Schema
+### 3.3 prd.json Schema
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["projectName", "userStories"],
+  "required": ["project", "branchName", "userStories"],
   "properties": {
-    "projectName": {
+    "project": {
       "type": "string",
       "description": "项目名称"
+    },
+    "branchName": {
+      "type": "string",
+      "description": "Git 分支名称",
+      "pattern": "^feature/.*$"
+    },
+    "description": {
+      "type": "string",
+      "description": "需求描述"
     },
     "createdAt": {
       "type": "string",
       "format": "date-time",
-      "description": "PRD 创建时间"
+      "description": "创建时间"
     },
     "userStories": {
       "type": "array",
@@ -640,40 +150,28 @@ AMP_CMD="amp"
         "properties": {
           "id": {
             "type": "string",
-            "description": "任务唯一 ID",
             "pattern": "^story-[0-9]{3}$"
           },
           "title": {
-            "type": "string",
-            "description": "任务标题"
+            "type": "string"
           },
           "description": {
-            "type": "string",
-            "description": "任务描述（用户故事格式）"
+            "type": "string"
           },
           "acceptanceCriteria": {
             "type": "array",
-            "items": {"type": "string"},
-            "description": "验收标准列表"
-          },
-          "technicalNotes": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "技术实现备注"
+            "items": {"type": "string"}
           },
           "priority": {
             "type": "integer",
-            "minimum": 1,
-            "description": "优先级（1=最高）"
+            "minimum": 1
           },
           "passes": {
-            "type": "boolean",
-            "description": "是否完成"
+            "type": "boolean"
           },
           "completedAt": {
             "type": ["string", "null"],
-            "format": "date-time",
-            "description": "完成时间"
+            "format": "date-time"
           }
         }
       }
@@ -690,25 +188,24 @@ AMP_CMD="amp"
 }
 ```
 
-### 示例
+---
+
+### 3.4 示例 prd.json
 
 ```json
 {
-  "projectName": "user-login-feature",
+  "project": "my-app",
+  "branchName": "feature/login-20260305",
+  "description": "用户登录功能",
   "createdAt": "2026-03-05T10:00:00Z",
   "userStories": [
     {
       "id": "story-001",
       "title": "添加登录表单组件",
-      "description": "作为用户，我想要输入邮箱密码登录，以便访问个人账户",
+      "description": "作为用户，我想要输入邮箱密码登录",
       "acceptanceCriteria": [
         "表单包含邮箱和密码输入框",
-        "密码输入框显示为掩码",
-        "提交后验证用户凭证"
-      ],
-      "technicalNotes": [
-        "使用 React Hook Form",
-        "密码前端加密传输"
+        "密码输入框显示为掩码"
       ],
       "priority": 1,
       "passes": false,
@@ -717,12 +214,6 @@ AMP_CMD="amp"
     {
       "id": "story-002",
       "title": "实现 JWT token 验证",
-      "description": "作为后端，我想要验证 JWT token，以便确保请求合法性",
-      "acceptanceCriteria": [
-        "验证 token 签名",
-        "检查 token 过期时间",
-        "无效 token 返回 401"
-      ],
       "priority": 2,
       "passes": false,
       "completedAt": null
@@ -738,397 +229,531 @@ AMP_CMD="amp"
 
 ---
 
-## 13. 存档机制
+## 4. 核心命令
 
-### 设计灵感
-
-借鉴 [snarktank/ralph](https://github.com/snarktank/ralph) 的分支切换存档策略，并在此基础上增强。
-
-### snarktank/ralph 的存档方式
+### 4.1 命令列表
 
 ```bash
-# 存档触发条件：分支变更时
-if [ "$CURRENT_BRANCH" != "$LAST_BRANCH" ]; then
-    ARCHIVE_FOLDER="$ARCHIVE_DIR/$DATE-$FOLDER_NAME"
-    cp "$PRD_FILE" "$ARCHIVE_FOLDER/"       # 存档 prd.json
-    cp "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"  # 存档 progress.txt
+# 需求管理
+ralph prd [name]           # 创建/切换需求
+ralph prd --list           # 查看所有需求
+ralph prd --archive        # 手动存档
+
+# 执行控制
+ralph                      # 执行当前需求
+ralph --stop               # 停止执行
+
+# 状态查看
+ralph status               # 查看当前状态
+ralph logs                 # 查看日志
+```
+
+---
+
+### 4.2 ralph prd [name] - 创建/切换需求
+
+```bash
+$ ralph prd login
+
+┌─────────────────────────────────────────┐
+│ 创建新需求：login                        │
+├─────────────────────────────────────────┤
+│                                         │
+│ 正在创建分支：feature/login-20260305    │
+│ 正在初始化 prd.json...                  │
+│                                         │
+│ 请用一句话描述需求：                    │
+│ > 用户登录，支持邮箱和 Google 登录       │
+│                                         │
+│ 正在启动 Claude 生成 PRD...             │
+│                                         │
+└─────────────────────────────────────────┘
+
+✅ 分支已创建：feature/login-20260305
+✅ prd.json 已生成
+
+是否开始执行？[y/n]
+```
+
+**实现逻辑**:
+
+```bash
+#!/bin/bash
+# ralph_prd.sh
+
+FEATURE_NAME=$1
+DATE_SUFFIX=$(date +%Y%m%d)
+BRANCH_NAME="feature/$FEATURE_NAME-$DATE_SUFFIX"
+
+# 1. 创建分支
+git checkout -b "$BRANCH_NAME"
+
+# 2. 初始化 prd.json
+cat > .ralph/prd.json << EOF
+{
+  "project": "$(basename $(pwd))",
+  "branchName": "$BRANCH_NAME",
+  "description": "",
+  "createdAt": "$(date -Iseconds)",
+  "userStories": []
+}
+EOF
+
+# 3. 启动 Claude 生成 PRD
+claude --dangerously-skip-permissions --prompt "
+生成 PRD，功能描述：$(cat)
+输出格式：prd.json
+"
+
+# 4. 提交
+git add .ralph/prd.json
+git commit -m "feat: 初始化 PRD - $FEATURE_NAME"
+
+# 5. 询问执行
+read -p "是否开始执行？[y/n] " answer
+[ "$answer" = "y" ] && ./ralph_loop.sh
+```
+
+---
+
+### 4.3 ralph prd --list - 查看需求列表
+
+```bash
+$ ralph prd --list
+
+┌─────────────────────────────────────────┐
+│ 需求列表                                 │
+├─────────────────────────────────────────┤
+│                                         │
+│  ✅ feature/dashboard    5/5 完成       │
+│  🔄 feature/login       3/5 进行中     │
+│  ⏸️  feature/api        2/10 已暂停    │
+│                                         │
+│  共 3 个需求，1 个进行中                  │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**实现逻辑**:
+
+```bash
+#!/bin/bash
+# ralph_prd_list.sh
+
+echo "需求列表："
+echo ""
+
+for branch in $(git branch | grep 'feature/' | sed 's/\*//' | tr -d ' '); do
+    prd=$(git show "$branch:.ralph/prd.json" 2>/dev/null)
+    
+    if [ -n "$prd" ]; then
+        total=$(echo "$prd" | jq '.userStories | length')
+        completed=$(echo "$prd" | jq '[.userStories[] | select(.passes == true)] | length')
+        
+        # 状态判断
+        if [ "$total" -eq "$completed" ]; then
+            status="✅"
+        elif git branch | grep -q "\* $branch"; then
+            status="🔄"
+        else
+            status="⏸️"
+        fi
+        
+        created=$(echo "$prd" | jq -r '.createdAt // "未知"' | cut -c1-10)
+        echo "  $status $branch - $completed/$total 完成 ($created)"
+    fi
+done
+```
+
+---
+
+### 4.4 ralph - 执行当前需求
+
+```bash
+$ ralph
+
+Starting Ralph - Max iterations: 10
+===============================================================
+  Ralph Iteration 1 of 10
+===============================================================
+
+当前任务：story-001 - 添加登录表单组件
+执行 Claude Code...
+运行质量检查...
+Git 提交：a1b2c3d
+更新 prd.json...
+
+迭代 1 完成。继续...
+```
+
+---
+
+## 5. 存档机制
+
+### 5.1 自动存档（分支切换时）
+
+```bash
+# 检测分支变化
+CURRENT_BRANCH=$(jq -r '.branchName' .ralph/prd.json)
+LAST_BRANCH=$(cat .ralph/.last-branch 2>/dev/null)
+
+if [ "$CURRENT_BRANCH" != "$LAST_BRANCH" ] && [ -n "$LAST_BRANCH" ]; then
+    # 存档
+    DATE=$(date +%Y-%m-%d)
+    FOLDER_NAME=$(echo "$LAST_BRANCH" | sed 's|^feature/||')
+    ARCHIVE_FOLDER=".ralph/archive/$DATE-$FOLDER_NAME"
+    
+    mkdir -p "$ARCHIVE_FOLDER"
+    cp .ralph/prd.json "$ARCHIVE_FOLDER/"
+    cp .ralph/progress.txt "$ARCHIVE_FOLDER/"
+    
+    echo "已存档：$ARCHIVE_FOLDER"
+    
+    # 重置进度
+    echo "# Ralph Progress Log" > .ralph/progress.txt
 fi
-```
 
-**优点**：
-- ✅ 自动触发，无需手动操作
-- ✅ 按特征分组，清晰
-- ✅ 保留上下文（prd.json + progress.txt）
-
-**缺点**：
-- ❌ 只在分支切换时存档
-- ❌ 同一分支内多次运行不存档
-- ❌ 无法回滚到某次迭代
-
----
-
-### Neo-Ralph 存档策略
-
-**三层存档机制**：
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Neo-Ralph 存档体系                      │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  1. Git 自动提交（每次迭代）                            │
-│     └─ prd.json 每次更新都 commit                        │
-│                                                         │
-│  2. 分支切换存档（自动）                                │
-│     └─ 检测到分支变化时，备份到 archive/by-branch/      │
-│                                                         │
-│  3. 里程碑存档（关键节点）                              │
-│     ├─ PRD 生成完成 → archive/prd-initial.json         │
-│     ├─ 所有任务完成 → archive/prd-complete.json        │
-│     └─ 手动触发 → archive/prd-manual-YYYYMMDD.json     │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+# 记录当前分支
+echo "$CURRENT_BRANCH" > .ralph/.last-branch
 ```
 
 ---
 
-### 存档目录结构
+### 5.2 存档目录结构
 
 ```
-.ralph/
-├── prd.json                    # 当前任务列表
-├── progress.txt                # 当前进度日志
-├── .last-run-id                # 上次运行 ID
-├── .last-branch                # 上次分支名称
-└── archive/
-    ├── by-branch/              # 按分支存档
-    │   ├── 2026-03-05-login-feature/
-    │   │   ├── prd.json
-    │   │   └── progress.txt
-    │   └── 2026-03-04-dashboard/
-    │       └── ...
-    ├── by-milestone/           # 按里程碑存档
-    │   ├── prd-initial.json    # 初始版本
-    │   ├── prd-complete.json   # 完成版本
-    │   └── prd-manual-20260305.json  # 手动存档
-    └── by-iteration/           # 按迭代存档（可选）
-        ├── iteration-001.json
-        ├── iteration-002.json
-        └── ...
+.ralph/archive/
+├── 2026-03-05-login/
+│   ├── prd.json              # 最终任务列表
+│   └── progress.txt          # 完整进度日志
+├── 2026-03-04-dashboard/
+│   └── ...
+└── ...
 ```
 
 ---
 
-### 存档触发逻辑
-
-```bash
-# 1. 分支切换检测（启动时）
-check_branch_change() {
-    local current_branch=$(jq -r '.branchName // empty' .ralph/prd.json)
-    local last_branch=$(cat .ralph/.last-branch 2>/dev/null || echo "")
-    
-    if [ -n "$current_branch" ] && [ -n "$last_branch" ] && [ "$current_branch" != "$last_branch" ]; then
-        archive_previous_run "$last_branch"
-    fi
-    
-    echo "$current_branch" > .ralph/.last-branch
-}
-
-# 2. 里程碑存档（关键节点）
-archive_milestone() {
-    local milestone=$1  # initial|complete|manual
-    local timestamp=$(date +%Y%m%d-%H%M%S)
-    
-    if [ "$milestone" = "initial" ]; then
-        cp .ralph/prd.json .ralph/archive/by-milestone/prd-initial.json
-    elif [ "$milestone" = "complete" ]; then
-        cp .ralph/prd.json .ralph/archive/by-milestone/prd-complete.json
-    elif [ "$milestone" = "manual" ]; then
-        cp .ralph/prd.json .ralph/archive/by-milestone/prd-manual-$timestamp.json
-    fi
-}
-
-# 3. Git 自动提交（每次迭代后）
-git_auto_commit_prd() {
-    if [ "$GIT_AUTO_COMMIT_PRD" = "true" ]; then
-        git add .ralph/prd.json
-        git commit -m "更新任务状态：$task_id"
-    fi
-}
-```
-
----
-
-### 配置项 (.ralphrc)
-
-```bash
-# 存档配置
-ARCHIVE_ENABLED=true
-ARCHIVE_ON_BRANCH_CHANGE=true      # 分支切换时存档（默认开启）
-ARCHIVE_ON_MILESTONE=true          # 里程碑时存档（默认开启）
-ARCHIVE_ON_ITERATION=false         # 每次迭代都存档（默认关闭，太占空间）
-ARCHIVE_RETENTION_DAYS=90          # 备份保留天数（默认 90 天）
-GIT_AUTO_COMMIT_PRD=true           # Git 自动提交 prd.json（默认开启）
-```
-
----
-
-### 存档文件清单
-
-| 文件 | Git 提交 | 分支存档 | 里程碑存档 | 迭代存档 |
-|------|----------|----------|------------|----------|
-| `prd.json` | ✅ | ✅ | ✅ | 可选 |
-| `progress.txt` | ✅ | ✅ | ❌ | ❌ |
-| `AGENTS.md` | ✅ | ✅ | ❌ | ❌ |
-| `status.json` | ❌ | ❌ | ❌ | ❌ |
-| `logs/*` | 可选 | ❌ | ❌ | ❌ |
-
----
-
-### 回滚操作
-
-```bash
-# 查看存档历史
-ls -la .ralph/archive/by-branch/
-ls -la .ralph/archive/by-milestone/
-
-# 回滚到某个版本
-cp .ralph/archive/by-branch/2026-03-05-login-feature/prd.json .ralph/prd.json
-
-# Git 回滚（如果启用了 Git 自动提交）
-git log --oneline .ralph/prd.json
-git checkout <commit-hash> -- .ralph/prd.json
-```
-
----
-
-### 清理策略
+### 5.3 清理策略
 
 ```bash
 # 定期清理过期存档（心跳任务）
-cleanup_old_archives() {
+cleanup_archives() {
     local retention_days=${ARCHIVE_RETENTION_DAYS:-90}
-    find .ralph/archive/by-branch/ -type d -mtime +$retention_days -exec rm -rf {} \;
-    find .ralph/archive/by-milestone/ -type f -mtime +$retention_days -exec rm -f {} \;
+    find .ralph/archive/ -type d -mtime +$retention_days -exec rm -rf {} \;
 }
 ```
 
 ---
 
-## 14. 权限机制
+## 6. 循环执行流程
 
-### 设计哲学
+### 6.1 完整流程
 
-Neo-Ralph 支持**可切换的权限模式**，结合 snarktank/ralph 的全权限模式和 frankbria 的白名单模式。
-
-### snarktank/ralph 的权限方式
-
-```bash
-# ralph.sh 核心代码
-if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1)
-else
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md")
-fi
 ```
-
-**特点**：
-- ✅ 使用 `--dangerously-allow-all` (Amp) 或 `--dangerously-skip-permissions` (Claude Code)
-- ✅ 完全信任 AI，无权限限制
-- ✅ 依赖 Git 分支隔离 + 质量检查控制风险
-- ❌ 可执行任何命令（包括危险操作）
-
-**适用场景**：个人项目、可信环境
+┌─────────────────────────────────────────────────────────┐
+│  循环开始                                                │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  1. 检查分支变化，自动存档                               │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  2. 切换到 prd.json 定义的分支                           │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  3. 读取 prd.json，选择 passes=false 的任务              │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  4. 读取 progress.txt，作为上下文                        │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  5. 调用 Claude Code 执行任务                            │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  6. 运行质量检查（typecheck/test）                      │
+└─────────────────────────────────────────────────────────┘
+    │
+    ├─── 失败 ───► 记录失败，继续下次迭代
+    │
+    通过
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  7. Git 提交                                             │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  8. 更新 prd.json (passes: true)                        │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  9. 追加 progress.txt                                    │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  10. 退出检测（所有 passes=true？）                     │
+└─────────────────────────────────────────────────────────┘
+    │
+    ├─── 是 ───► 输出 <promise>COMPLETE</promise>，退出
+    │
+    否
+    │
+    ▼
+(回到步骤 1)
+```
 
 ---
 
-### frankbria/ralph-claude-code 的权限方式
+### 6.2 核心代码
+
+```bash
+#!/bin/bash
+# ralph_loop.sh (简化版)
+
+PRD_FILE=".ralph/prd.json"
+PROGRESS_FILE=".ralph/progress.txt"
+MAX_ITERATIONS=${1:-10}
+
+for i in $(seq 1 $MAX_ITERATIONS); do
+    echo "==============================================================="
+    echo "  Ralph Iteration $i of $MAX_ITERATIONS"
+    echo "==============================================================="
+    
+    # 1. 检查分支变化，自动存档
+    check_branch_change
+    
+    # 2. 切换到 PRD 分支
+    CURRENT_BRANCH=$(jq -r '.branchName' "$PRD_FILE")
+    git checkout "$CURRENT_BRANCH" 2>/dev/null
+    
+    # 3. 获取下一个任务
+    TASK=$(jq -r '.userStories[] | select(.passes == false) | @json' "$PRD_FILE" | head -1)
+    
+    if [ -z "$TASK" ]; then
+        echo "✅ 所有任务完成！"
+        echo "<promise>COMPLETE</promise>"
+        exit 0
+    fi
+    
+    # 4. 执行任务
+    OUTPUT=$(claude --dangerously-skip-permissions --prompt "
+完成任务：$(echo "$TASK" | jq -r '.title')
+描述：$(echo "$TASK" | jq -r '.description')
+验收标准：$(echo "$TASK" | jq -r '.acceptanceCriteria[]')
+" 2>&1)
+    
+    # 5. 质量检查
+    if ! npm run typecheck && npm run test; then
+        echo "❌ 质量检查失败"
+        continue
+    fi
+    
+    # 6. Git 提交
+    git add -A
+    git commit -m "完成：$(echo "$TASK" | jq -r '.id') - $(echo "$TASK" | jq -r '.title')"
+    
+    # 7. 更新 prd.json
+    TASK_ID=$(echo "$TASK" | jq -r '.id')
+    jq "(.userStories[] | select(.id == \"$TASK_ID\")).passes = true" "$PRD_FILE" > tmp.json
+    mv tmp.json "$PRD_FILE"
+    
+    # 8. 追加进度
+    echo "## $(date) - $TASK_ID" >> "$PROGRESS_FILE"
+    echo "- 完成：$(echo "$TASK" | jq -r '.title')" >> "$PROGRESS_FILE"
+    echo "---" >> "$PROGRESS_FILE"
+    
+    echo "迭代 $i 完成。继续..."
+done
+
+echo "❌ 达到最大迭代次数"
+exit 1
+```
+
+---
+
+## 7. 权限机制
+
+### 7.1 默认模式：全权限
+
+```bash
+# 同 snarktank/ralph
+claude --dangerously-skip-permissions --prompt "..."
+```
+
+**理由**：
+- ✅ 简单，无配置
+- ✅ Git 分支隔离提供安全边界
+- ✅ 质量检查防止烂代码
+- ✅ 人类最终审查（PR/MR）
+
+---
+
+### 7.2 可选模式：限制模式
 
 ```bash
 # .ralphrc 配置
+PERMISSION_MODE="restricted"
 ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
 
-# ralph_loop.sh 调用
+# ralph_loop.sh 使用
 claude --allowed-tools "$ALLOWED_TOOLS" --prompt "..."
 ```
-
-**特点**：
-- ✅ 白名单机制，默认拒绝
-- ✅ 可阻止危险操作
-- ❌ 配置复杂，权限不足需手动调整
-- ❌ 可能限制 AI 发挥
-
-**适用场景**：生产环境、团队协作
-
----
-
-### Neo-Ralph 权限模式
-
-**三种可选模式**：
-
-```bash
-# .ralphrc 配置
-PERMISSION_MODE="hybrid"  # full | restricted | hybrid
-```
-
-#### 模式 1: Full（全权限，snarktank 风格）
-
-```bash
-PERMISSION_MODE="full"
-
-# CLI 参数
-CLAUDE_FLAGS="--dangerously-skip-permissions"
-```
-
-**特点**：
-- 完全信任 AI
-- 无权限检查开销
-- 依赖事后机制（Git、质检）控制风险
-
-**适用场景**：个人项目、完全信任的代码库
-
----
-
-#### 模式 2: Restricted（限制模式，frankbria 风格）
-
-```bash
-PERMISSION_MODE="restricted"
-
-# .ralphrc 配置
-ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm run test),Bash(npm run build)"
-
-# CLI 参数
-CLAUDE_FLAGS="--allowed-tools $ALLOWED_TOOLS"
-```
-
-**特点**：
-- 白名单机制
-- 阻止未授权操作
-- 权限不足时需手动扩展
 
 **适用场景**：生产环境、核心项目
 
 ---
 
-#### 模式 3: Hybrid（混合模式，推荐）
+## 8. 配置文件
+
+### 8.1 .ralphrc（可选）
 
 ```bash
-PERMISSION_MODE="hybrid"
+# 项目配置
+PROJECT_NAME="my-app"
 
-# .ralphrc 配置
+# 权限模式
+PERMISSION_MODE="full"  # full | restricted
+
+# 限制模式配置
 ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
-DANGEROUS_COMMANDS="rm -rf,dd,sudo,chmod,curl|wget"  # 敏感命令列表
 
-# CLI 参数
-CLAUDE_FLAGS="--allowed-tools $ALLOWED_TOOLS"
+# 存档配置
+ARCHIVE_RETENTION_DAYS=90
 
-# 特殊处理：AI 可请求临时权限扩展
-# （记录到日志，用户事后审查）
+# 执行配置
+MAX_ITERATIONS=10
+QUALITY_CHECKS="npm run typecheck && npm run test"
 ```
 
-**特点**：
-- 默认白名单
-- 允许 AI 请求扩展（需记录）
-- 平衡灵活性与安全性
-
-**适用场景**：大多数团队项目
-
 ---
 
-### 权限模式对比
+## 9. 安全机制
 
-| 模式 | CLI 参数 | 安全性 | 灵活性 | 推荐场景 |
-|------|----------|--------|--------|----------|
-| **Full** | `--dangerously-skip-permissions` | ⭐⭐ | ⭐⭐⭐⭐⭐ | 个人项目 |
-| **Restricted** | `--allowed-tools "..."` | ⭐⭐⭐⭐⭐ | ⭐⭐ | 生产环境 |
-| **Hybrid** | `--allowed-tools "..."` + 扩展机制 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 团队项目 |
-
----
-
-### 安全机制（所有模式通用）
-
-无论哪种权限模式，以下安全机制始终生效：
+### 9.1 多层保护
 
 | 机制 | 说明 |
 |------|------|
-| **Git 分支隔离** | 每个 PRD 在独立分支，不直接污染 main |
-| **质量检查门禁** | typecheck/test 必须通过才提交 |
-| **进度追踪** | progress.txt 记录每次迭代，可追溯 |
-| **存档机制** | 关键节点自动存档，可回滚 |
-| **人类最终审查** | PR/MR 需要人工 merge |
+| **Git 分支隔离** | 每个需求在独立分支，不污染 main |
+| **质量检查** | typecheck/test 必须通过才提交 |
+| **进度追踪** | progress.txt 完整记录每次迭代 |
+| **自动存档** | 分支切换时自动备份 |
+| **人类审查** | PR/MR 需要人工 merge |
 
 ---
 
-### 配置示例
+## 10. 对比分析
+
+### 10.1 与 snarktank/ralph 对比
+
+| 功能 | snarktank | Neo-Ralph |
+|------|-----------|-----------|
+| **分支管理** | ✅ | ✅ (同) |
+| **需求列表** | ❌ | ✅ (新增) |
+| **自动存档** | ✅ | ✅ (同) |
+| **元数据** | ❌ | ✅ (createdAt 等) |
+| **权限模式** | 全权限 | 可切换 |
+| **配置** | ❌ | ✅ (可选) |
+
+---
+
+### 10.2 与 frankbria 对比
+
+| 功能 | frankbria | Neo-Ralph |
+|------|-----------|-----------|
+| **需求隔离** | .ralph/ 子目录 | Git 分支 |
+| **配置复杂度** | 高 | 低 |
+| **文件数量** | 多 | 少 |
+| **Git 耦合** | 低 | 高 |
+| **学习成本** | 中 | 低 |
+
+---
+
+## 11. 最佳实践
+
+### 11.1 分支命名
 
 ```bash
-# .ralphrc 完整配置
+# 推荐格式
+feature/<name>-<YYYYMMDD>
 
-# 权限模式
-PERMISSION_MODE="hybrid"
+# 示例
+feature/login-20260305
+feature/dashboard-20260306
+feature/api-refactor-20260307
+```
 
-# Full 模式（无需额外配置）
-# PERMISSION_MODE="full"
+### 11.2 任务拆分
 
-# Restricted 模式
-# PERMISSION_MODE="restricted"
-# ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm run test)"
+```
+✅ 好的任务（小）
+- 添加数据库字段
+- 添加 UI 组件
+- 更新 API 端点
 
-# Hybrid 模式
-ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *)"
-DANGEROUS_COMMANDS="rm -rf,dd,sudo,chmod"
+❌ 大的任务（拆分）
+- 实现整个登录模块
+- 重构所有 API
+```
 
-# 其他安全配置
-GIT_BRANCH_ISOLATION=true      # Git 分支隔离
-ENFORCE_QUALITY_CHECKS=true    # 强制质量检查
-PROGRESS_TRACKING=true         # 进度追踪
-ARCHIVE_ON_MILESTONE=true      # 里程碑存档
+### 11.3 提交频率
+
+```
+每次迭代 = 1 次提交
+
+保持 CI 绿色，不要累积多个任务再提交
 ```
 
 ---
 
-### 权限拒绝处理
+## 12. 总结
+
+Neo-Ralph 采用 **snarktank/ralph 的 Git 分支管理逻辑**，保持简洁：
+
+1. **一个需求 = 一个分支** - Git 天然隔离
+2. **最少文件** - prd.json + progress.txt
+3. **自动存档** - 分支切换时备份
+4. **需求列表** - 从 Git 分支读取
+5. **人类审查** - PR/MR 人工 merge
+
+**核心理念**：简单即美，Git 即真相。
+
+---
+
+## 附录
+
+### A. 文件清单
+
+| 文件 | 用途 |
+|------|------|
+| `ralph` | 主执行脚本 |
+| `ralph_prd.sh` | 需求管理 |
+| `ralph_loop.sh` | 循环执行 |
+| `.ralph/prd.json` | 任务列表 |
+| `.ralph/progress.txt` | 进度日志 |
+
+### B. 快速开始
 
 ```bash
-# 当 AI 尝试执行未授权命令时
+# 1. 创建需求
+ralph prd login
 
-if command_denied; then
-    echo "❌ 权限拒绝：$command"
-    echo "允许的工具：$ALLOWED_TOOLS"
-    
-    # 记录到日志
-    log_permission_denied "$command"
-    
-    # 继续下一次迭代（不中断）
-    continue
-fi
+# 2. 查看列表
+ralph prd --list
+
+# 3. 执行
+ralph
 ```
-
----
-
-### 推荐配置
-
-| 项目类型 | 推荐模式 | 配置示例 |
-|----------|----------|----------|
-| **个人项目** | Full | `PERMISSION_MODE="full"` |
-| **团队项目** | Hybrid | `PERMISSION_MODE="hybrid"` |
-| **核心项目** | Restricted | `PERMISSION_MODE="restricted"` |
-| **实验性质** | Full | `PERMISSION_MODE="full"` |
-| **生产环境** | Restricted | `PERMISSION_MODE="restricted"` |
-
----
-
-## 15. 总结
-
-Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
-
-1. **模式双轨制** - 短任务轻量，长任务连续
-2. **强制单任务** - 避免上下文过载
-3. **质量门禁** - 防止烂代码累积
-4. **Git 记忆** - 完整可追溯
-5. **系统保护** - 速率限制 + 断路器
-6. **统一任务源** - 只用 prd.json（结构化）
-7. **三层存档** - Git + 分支 + 里程碑
-8. **灵活权限** - Full/Restricted/Hybrid 三模式可选
-
-下一步：编写 `modification-plan.md` 详细修改清单。
