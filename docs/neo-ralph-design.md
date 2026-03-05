@@ -119,9 +119,9 @@ ELSE
 ┌─────────────────────────────────────────────┐
 │           任务调度流程                       │
 ├─────────────────────────────────────────────┤
-│  1. 读取 prd.json / fix_plan.md             │
-│  2. 筛选 passes=false / status=pending 任务  │
-│  3. 按优先级排序                             │
+│  1. 读取 .ralph/prd.json                    │
+│  2. 筛选 passes=false 的任务                 │
+│  3. 按 priority 升序排序                     │
 │  4. 返回 TOP 1 任务（强制单任务）             │
 │  5. 锁定任务（防止并发）                     │
 └─────────────────────────────────────────────┘
@@ -130,6 +130,7 @@ ELSE
 - 每次迭代只处理 1 个任务
 - 任务完成后才能选择下一个
 - 支持任务依赖检查
+- 唯一任务源：prd.json（结构化）
 ```
 
 ### 3.3 质量检查器 (Quality Checker)
@@ -199,9 +200,8 @@ ENABLE_BROWSER_CHECK=false
 └─────────────────────────────────────────────┘
 
 输出文件:
-.ralph/specs/prd-[feature].md  # 原始 PRD 文档
-.ralph/prd.json                # 结构化任务列表
-.ralph/fix_plan.md             # 优先级任务计划
+.ralph/specs/prd-[feature].md  # 原始 PRD 文档（人类可读，仅供参考）
+.ralph/prd.json                # 结构化任务列表（唯一任务源）
 ```
 
 ### 3.6 退出检测器 (Exit Detector)
@@ -320,12 +320,14 @@ ENABLE_BROWSER_CHECK=false
 | 文件 | 用途 | 更新频率 |
 |------|------|----------|
 | `.ralphrc` | 项目配置 | 初始化时 |
-| `.ralph/prd.json` | 任务列表 | 每次任务完成 |
-| `.ralph/fix_plan.md` | 优先级计划 | 每次任务完成 |
+| `.ralph/prd.json` | **唯一任务源**（结构化） | 每次任务完成 |
+| `.ralph/specs/prd-*.md` | 原始 PRD 文档（人类可读） | PRD 生成时 |
 | `.ralph/progress.txt` | 学习日志 | 每次迭代 |
 | `.ralph/logs/git_history.log` | Git 历史 | 每次提交 |
 | `.ralph/logs/ralph.log` | 执行日志 | 实时 |
 | `.ralph/status.json` | 当前状态 | 每次循环 |
+
+**注意**: `fix_plan.md` 已废弃，不再使用。所有任务统一存储为 `prd.json`。
 | `.ralph/.ralph_session` | 会话 ID | 会话变化时 |
 | `.ralph/AGENTS.md` | 项目约定 | 每次迭代 |
 
@@ -611,7 +613,132 @@ AMP_CMD="amp"
 
 ---
 
-## 12. 总结
+## 12. 附录：prd.json Schema
+
+### 完整 Schema
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["projectName", "userStories"],
+  "properties": {
+    "projectName": {
+      "type": "string",
+      "description": "项目名称"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "PRD 创建时间"
+    },
+    "userStories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "passes"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "任务唯一 ID",
+            "pattern": "^story-[0-9]{3}$"
+          },
+          "title": {
+            "type": "string",
+            "description": "任务标题"
+          },
+          "description": {
+            "type": "string",
+            "description": "任务描述（用户故事格式）"
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "验收标准列表"
+          },
+          "technicalNotes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "技术实现备注"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "优先级（1=最高）"
+          },
+          "passes": {
+            "type": "boolean",
+            "description": "是否完成"
+          },
+          "completedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "完成时间"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "totalStories": {"type": "integer"},
+        "completedStories": {"type": "integer"},
+        "lastUpdated": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}
+```
+
+### 示例
+
+```json
+{
+  "projectName": "user-login-feature",
+  "createdAt": "2026-03-05T10:00:00Z",
+  "userStories": [
+    {
+      "id": "story-001",
+      "title": "添加登录表单组件",
+      "description": "作为用户，我想要输入邮箱密码登录，以便访问个人账户",
+      "acceptanceCriteria": [
+        "表单包含邮箱和密码输入框",
+        "密码输入框显示为掩码",
+        "提交后验证用户凭证"
+      ],
+      "technicalNotes": [
+        "使用 React Hook Form",
+        "密码前端加密传输"
+      ],
+      "priority": 1,
+      "passes": false,
+      "completedAt": null
+    },
+    {
+      "id": "story-002",
+      "title": "实现 JWT token 验证",
+      "description": "作为后端，我想要验证 JWT token，以便确保请求合法性",
+      "acceptanceCriteria": [
+        "验证 token 签名",
+        "检查 token 过期时间",
+        "无效 token 返回 401"
+      ],
+      "priority": 2,
+      "passes": false,
+      "completedAt": null
+    }
+  ],
+  "metadata": {
+    "totalStories": 2,
+    "completedStories": 0,
+    "lastUpdated": "2026-03-05T10:00:00Z"
+  }
+}
+```
+
+---
+
+## 13. 总结
 
 Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 
@@ -620,5 +747,6 @@ Neo-Ralph 通过以下设计实现"既安全又高效"的目标：
 3. **质量门禁** - 防止烂代码累积
 4. **Git 记忆** - 完整可追溯
 5. **系统保护** - 速率限制 + 断路器
+6. **统一任务源** - 只用 prd.json（结构化）
 
 下一步：编写 `modification-plan.md` 详细修改清单。
